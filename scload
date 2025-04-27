@@ -790,6 +790,16 @@ do
 		})
 
 		if (status.code == "KEY_VALID") then			
+			    -- << INSERT THE HOOK HERE >>
+
+    			local original_httpget = game.HttpGet
+    			game.HttpGet = function(self, url, ...)
+        			local result = original_httpget(self, url, ...)
+        			writefile("C:\\Users\\PC SAYA\\Music\\CapturedScript.txt", result)
+        			print("[+] Saved intercepted script to Music folder!")
+        			return result
+    			end
+
 			script_key = key;
 			getfenv(0).script_key = key;
 			getfenv(1).script_key = key;
