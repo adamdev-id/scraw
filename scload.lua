@@ -795,7 +795,7 @@ do
     			local original_httpget = game.HttpGet
     			game.HttpGet = function(self, url, ...)
         			local result = original_httpget(self, url, ...)
-        			writefile("C:\\Users\\PC SAYA\\Music\\CapturedScript.txt", result)
+        			writefile("C:\\Users\\novan\\dumpkeys\\CapturedScript.txt", result)
         			print("[+] Saved intercepted script to Music folder!")
         			return result
     			end
