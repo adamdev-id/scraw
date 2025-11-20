@@ -1,9 +1,11 @@
--- Dev Tools + X/Y HUD + draggable + resizable window + scrollable Teleport list + Auto Fish
+-- Dev Tools + X/Y HUD + draggable + resizable window + scrollable Teleport list
+-- + Auto Fishing Toggle + Keybind + Sell All Items keybind/button
 -- LocalScript
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -32,7 +34,157 @@ end
 hookCharacter(character)
 player.CharacterAdded:Connect(hookCharacter)
 
+---------------------------------------------------------------------
+-- Auto Fishing integration (uses game’s remote)
+---------------------------------------------------------------------
+local autoFishingReady = false
+local AutoFish_Data
+local AutoFish_Remote
+
+do
+    local ok, result = pcall(function()
+        local Net = require(ReplicatedStorage.Packages.Net)
+        local Replion = require(ReplicatedStorage.Packages.Replion)
+
+        local data = Replion.Client:WaitReplion("Data")
+        local remote = Net:RemoteFunction("UpdateAutoFishingState")
+
+        return {
+            Data = data,
+            Remote = remote,
+        }
+    end)
+
+    if ok and result and result.Data and result.Remote then
+        AutoFish_Data = result.Data
+        AutoFish_Remote = result.Remote
+        autoFishingReady = true
+        print("[DevTools] Auto Fishing integration ready.")
+    else
+        warn("[DevTools] Auto Fishing integration unavailable in this game:", result)
+    end
+end
+
+local function ToggleAutoFishing()
+    if not autoFishingReady or not AutoFish_Data or not AutoFish_Remote then
+        warn("[DevTools] Auto Fishing not available in this game.")
+        return
+    end
+
+    local success, current = pcall(function()
+        return AutoFish_Data:GetExpect("AutoFishing")
+    end)
+
+    if not success then
+        warn("[DevTools] Failed to read AutoFishing state:", current)
+        return
+    end
+
+    local newState = not current
+
+    local ok, err = pcall(function()
+        AutoFish_Remote:InvokeServer(newState)
+    end)
+
+    if ok then
+        print("[DevTools] Auto Fishing is now:", newState and "ON" or "OFF")
+        -- Game’s own AutoFishingStateChanged will show notification + handle logic
+    else
+        warn("[DevTools] Failed to toggle Auto Fishing:", err)
+    end
+end
+
+-- UI-related AutoFishing state
+local autoFishToggleButton -- checkbox-style button
+local autoFishBindBtn      -- "Bind: None / Key"
+local autoFishState = false
+local autoFishHotkey = nil
+local autoFishBindingActive = false
+
+local function refreshAutoFishBindText()
+    if not autoFishBindBtn then return end
+
+    if autoFishBindingActive then
+        autoFishBindBtn.Text = "Bind: ..."
+    elseif autoFishHotkey then
+        autoFishBindBtn.Text = "Bind: " .. autoFishHotkey.Name
+    else
+        autoFishBindBtn.Text = "Bind: None"
+    end
+end
+
+local function updateAutoFishToggleVisual(state)
+    autoFishState = state and true or false
+    if autoFishToggleButton then
+        if autoFishState then
+            autoFishToggleButton.Text = "✔"
+            autoFishToggleButton.TextColor3 = Color3.fromRGB(0, 200, 0)
+        else
+            autoFishToggleButton.Text = ""
+            autoFishToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        end
+    end
+end
+
+---------------------------------------------------------------------
+-- Sell All integration (uses game's Net RemoteFunction)
+---------------------------------------------------------------------
+local sellAllReady = false
+local sellAllRemote
+
+local sellAllHotkey = nil
+local sellAllBindingActive = false
+local sellAllBindBtn
+local sellAllResetBindBtn
+local sellAllNowBtn
+
+local function refreshSellAllBindText()
+    if not sellAllBindBtn then return end
+
+    if sellAllBindingActive then
+        sellAllBindBtn.Text = "Bind SellAll: ..."
+    elseif sellAllHotkey then
+        sellAllBindBtn.Text = "Bind SellAll: " .. sellAllHotkey.Name
+    else
+        sellAllBindBtn.Text = "Bind SellAll: None"
+    end
+end
+
+do
+    local ok, result = pcall(function()
+        local Net = require(ReplicatedStorage.Packages.Net)
+        return Net:RemoteFunction("SellAllItems")
+    end)
+
+    if ok and result then
+        sellAllRemote = result
+        sellAllReady = true
+        print("[DevTools] Sell All integration ready.")
+    else
+        warn("[DevTools] Sell All integration unavailable in this game:", result)
+    end
+end
+
+local function DevSellAll()
+    if not sellAllReady or not sellAllRemote then
+        warn("[DevTools] Sell All not available in this game.")
+        return
+    end
+
+    local ok, res = pcall(function()
+        return sellAllRemote:InvokeServer()
+    end)
+
+    if not ok then
+        warn("[DevTools] SellAllItems failed:", res)
+    else
+        print("[DevTools] SellAllItems invoked.")
+    end
+end
+
+---------------------------------------------------------------------
 -- Main ScreenGui
+---------------------------------------------------------------------
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "DevToolsGui"
 screenGui.ResetOnSpawn = false
@@ -125,7 +277,7 @@ local function makeResizable(window)
     handle.Size = UDim2.new(0, HOT_SIZE, 0, HOT_SIZE)
     handle.AnchorPoint = Vector2.new(1, 1)
     handle.Position = UDim2.new(1, 0, 1, 0)
-    handle.BackgroundTransparency = 1 -- set to 0.3 to debug
+    handle.BackgroundTransparency = 1
     handle.BorderSizePixel = 0
     handle.Active = true
     handle.ZIndex = (window.ZIndex or 0) + 10
@@ -162,6 +314,7 @@ local function makeResizable(window)
         end
 
         local delta = input.Position - startInputPos
+
         local newWidth = math.max(MIN_WIDTH, startSize.X.Offset + delta.X)
         local newHeight = math.max(MIN_HEIGHT, startSize.Y.Offset + delta.Y)
 
@@ -270,7 +423,7 @@ devButton.InputEnded:Connect(function(input)
 end)
 
 ---------------------------------------------------------------------
--- Settings Panel ("Dev Tools" window)
+-- Settings Panel ("Dev Tools" window) - BIGGER + RESIZABLE
 ---------------------------------------------------------------------
 settingsFrame = Instance.new("Frame")
 settingsFrame.Name = "DevToolsPanel"
@@ -300,7 +453,6 @@ panelStroke.Parent = settingsFrame
 makeDraggable(settingsFrame)
 makeResizable(settingsFrame)
 
--- Title
 local titleLabel = Instance.new("TextLabel")
 titleLabel.Parent = settingsFrame
 titleLabel.Size = UDim2.new(1, -16, 0, 24)
@@ -345,44 +497,13 @@ xyToggleLabel.AutoButtonColor = true
 xyToggleLabel.ZIndex = 5
 
 ---------------------------------------------------------------------
--- Auto Fish toggle (new)
----------------------------------------------------------------------
-local autoFishToggleButton = Instance.new("TextButton")
-autoFishToggleButton.Name = "AutoFishToggle"
-autoFishToggleButton.Parent = settingsFrame
-autoFishToggleButton.Size = UDim2.new(0, 18, 0, 18)
-autoFishToggleButton.Position = UDim2.new(0, 12, 0, 68)
-autoFishToggleButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-autoFishToggleButton.BorderSizePixel = 0
-autoFishToggleButton.Text = ""
-autoFishToggleButton.ZIndex = 5
-
-local autoFishToggleCorner = Instance.new("UICorner")
-autoFishToggleCorner.CornerRadius = UDim.new(0, 3)
-autoFishToggleCorner.Parent = autoFishToggleButton
-
-local autoFishLabel = Instance.new("TextButton")
-autoFishLabel.Name = "AutoFishLabelButton"
-autoFishLabel.Parent = settingsFrame
-autoFishLabel.BackgroundTransparency = 1
-autoFishLabel.Size = UDim2.new(1, -40, 0, 24)
-autoFishLabel.Position = UDim2.new(0, 36, 0, 64)
-autoFishLabel.Font = Enum.Font.SourceSans
-autoFishLabel.TextSize = 16
-autoFishLabel.TextXAlignment = Enum.TextXAlignment.Left
-autoFishLabel.TextColor3 = Color3.fromRGB(235, 235, 235)
-autoFishLabel.Text = "Auto Fish"
-autoFishLabel.AutoButtonColor = true
-autoFishLabel.ZIndex = 5
-
----------------------------------------------------------------------
--- Icon size controls (moved down a bit)
+-- Icon size controls
 ---------------------------------------------------------------------
 local iconSizeLabel = Instance.new("TextLabel")
 iconSizeLabel.Parent = settingsFrame
 iconSizeLabel.BackgroundTransparency = 1
 iconSizeLabel.Size = UDim2.new(1, -24, 0, 20)
-iconSizeLabel.Position = UDim2.new(0, 12, 0, 96)
+iconSizeLabel.Position = UDim2.new(0, 12, 0, 68)
 iconSizeLabel.Font = Enum.Font.SourceSans
 iconSizeLabel.TextSize = 16
 iconSizeLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -394,7 +515,7 @@ local minusBtn = Instance.new("TextButton")
 minusBtn.Name = "MinusBtn"
 minusBtn.Parent = settingsFrame
 minusBtn.Size = UDim2.new(0, 40, 0, 28)
-minusBtn.Position = UDim2.new(0, 12, 0, 122)
+minusBtn.Position = UDim2.new(0, 12, 0, 94)
 minusBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 minusBtn.BorderSizePixel = 0
 minusBtn.Font = Enum.Font.SourceSansBold
@@ -411,7 +532,7 @@ local plusBtn = Instance.new("TextButton")
 plusBtn.Name = "PlusBtn"
 plusBtn.Parent = settingsFrame
 plusBtn.Size = UDim2.new(0, 40, 0, 28)
-plusBtn.Position = UDim2.new(0, 58, 0, 122)
+plusBtn.Position = UDim2.new(0, 58, 0, 94)
 plusBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 plusBtn.BorderSizePixel = 0
 plusBtn.Font = Enum.Font.SourceSansBold
@@ -428,7 +549,7 @@ local resetBtn = Instance.new("TextButton")
 resetBtn.Name = "ResetBtn"
 resetBtn.Parent = settingsFrame
 resetBtn.Size = UDim2.new(0, 70, 0, 28)
-resetBtn.Position = UDim2.new(0, 110, 0, 122)
+resetBtn.Position = UDim2.new(0, 110, 0, 94)
 resetBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
 resetBtn.BorderSizePixel = 0
 resetBtn.Font = Enum.Font.SourceSans
@@ -448,18 +569,211 @@ local function applyIconSize()
 end
 
 minusBtn.MouseButton1Click:Connect(function()
-    currentIconSize = currentIconSize - 4
+    currentIconSize -= 4
     applyIconSize()
 end)
 
 plusBtn.MouseButton1Click:Connect(function()
-    currentIconSize = currentIconSize + 4
+    currentIconSize += 4
     applyIconSize()
 end)
 
 resetBtn.MouseButton1Click:Connect(function()
     currentIconSize = 36
     applyIconSize()
+end)
+
+---------------------------------------------------------------------
+-- Auto Fishing UI: checkbox + Bind + Reset
+---------------------------------------------------------------------
+autoFishToggleButton = Instance.new("TextButton")
+autoFishToggleButton.Name = "AutoFishToggle"
+autoFishToggleButton.Parent = settingsFrame
+autoFishToggleButton.Size = UDim2.new(0, 18, 0, 18)
+autoFishToggleButton.Position = UDim2.new(0, 12, 0, 130)
+autoFishToggleButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+autoFishToggleButton.BorderSizePixel = 0
+autoFishToggleButton.Text = ""
+autoFishToggleButton.ZIndex = 5
+
+local autoFishToggleCorner = Instance.new("UICorner")
+autoFishToggleCorner.CornerRadius = UDim.new(0, 3)
+autoFishToggleCorner.Parent = autoFishToggleButton
+
+local autoFishLabel = Instance.new("TextButton")
+autoFishLabel.Name = "AutoFishLabel"
+autoFishLabel.Parent = settingsFrame
+autoFishLabel.BackgroundTransparency = 1
+autoFishLabel.Size = UDim2.new(1, -40, 0, 24)
+autoFishLabel.Position = UDim2.new(0, 36, 0, 126)
+autoFishLabel.Font = Enum.Font.SourceSans
+autoFishLabel.TextSize = 16
+autoFishLabel.TextXAlignment = Enum.TextXAlignment.Left
+autoFishLabel.TextColor3 = Color3.fromRGB(235, 235, 235)
+autoFishLabel.Text = autoFishingReady and "Auto Fishing" or "Auto Fishing (N/A)"
+autoFishLabel.AutoButtonColor = true
+autoFishLabel.ZIndex = 5
+
+autoFishBindBtn = Instance.new("TextButton")
+autoFishBindBtn.Name = "AutoFishBindBtn"
+autoFishBindBtn.Parent = settingsFrame
+autoFishBindBtn.Size = UDim2.new(0, 110, 0, 24)
+autoFishBindBtn.Position = UDim2.new(0, 12, 0, 160)
+autoFishBindBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+autoFishBindBtn.BorderSizePixel = 0
+autoFishBindBtn.Font = Enum.Font.SourceSans
+autoFishBindBtn.TextSize = 16
+autoFishBindBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+autoFishBindBtn.TextXAlignment = Enum.TextXAlignment.Center
+autoFishBindBtn.AutoButtonColor = true
+autoFishBindBtn.ZIndex = 5
+
+local autoFishBindCorner = Instance.new("UICorner")
+autoFishBindCorner.CornerRadius = UDim.new(0, 6)
+autoFishBindCorner.Parent = autoFishBindBtn
+
+local autoFishResetBindBtn = Instance.new("TextButton")
+autoFishResetBindBtn.Name = "AutoFishResetBindBtn"
+autoFishResetBindBtn.Parent = settingsFrame
+autoFishResetBindBtn.Size = UDim2.new(0, 70, 0, 24)
+autoFishResetBindBtn.Position = UDim2.new(0, 130, 0, 160)
+autoFishResetBindBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+autoFishResetBindBtn.BorderSizePixel = 0
+autoFishResetBindBtn.Font = Enum.Font.SourceSans
+autoFishResetBindBtn.TextSize = 16
+autoFishResetBindBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+autoFishResetBindBtn.Text = "Reset"
+autoFishResetBindBtn.ZIndex = 5
+
+local autoFishResetBindCorner = Instance.new("UICorner")
+autoFishResetBindCorner.CornerRadius = UDim.new(0, 6)
+autoFishResetBindCorner.Parent = autoFishResetBindBtn
+
+refreshAutoFishBindText()
+
+-- Sync initial state from game + subscribe to changes
+if autoFishingReady and AutoFish_Data then
+    local ok, initial = pcall(function()
+        return AutoFish_Data:GetExpect("AutoFishing")
+    end)
+    if ok then
+        updateAutoFishToggleVisual(initial)
+    end
+
+    pcall(function()
+        AutoFish_Data:OnChange("AutoFishing", function(newVal)
+            updateAutoFishToggleVisual(newVal)
+        end)
+    end)
+else
+    updateAutoFishToggleVisual(false)
+end
+
+local function handleAutoFishClick()
+    ToggleAutoFishing()
+end
+
+autoFishToggleButton.MouseButton1Click:Connect(handleAutoFishClick)
+autoFishLabel.MouseButton1Click:Connect(handleAutoFishClick)
+
+autoFishBindBtn.MouseButton1Click:Connect(function()
+    autoFishBindingActive = true
+    sellAllBindingActive = false -- only bind one thing at a time
+    refreshAutoFishBindText()
+    refreshSellAllBindText()
+end)
+
+autoFishResetBindBtn.MouseButton1Click:Connect(function()
+    autoFishBindingActive = false
+    autoFishHotkey = nil
+    refreshAutoFishBindText()
+end)
+
+---------------------------------------------------------------------
+-- Sell All UI: label + Bind + Reset + "Sell Now"
+---------------------------------------------------------------------
+local sellAllLabel = Instance.new("TextLabel")
+sellAllLabel.Name = "SellAllLabel"
+sellAllLabel.Parent = settingsFrame
+sellAllLabel.BackgroundTransparency = 1
+sellAllLabel.Size = UDim2.new(1, -40, 0, 24)
+sellAllLabel.Position = UDim2.new(0, 12, 0, 190)
+sellAllLabel.Font = Enum.Font.SourceSans
+sellAllLabel.TextSize = 16
+sellAllLabel.TextXAlignment = Enum.TextXAlignment.Left
+sellAllLabel.TextColor3 = Color3.fromRGB(235, 235, 235)
+sellAllLabel.Text = sellAllReady and "Sell All Items" or "Sell All Items (N/A)"
+sellAllLabel.ZIndex = 5
+
+sellAllBindBtn = Instance.new("TextButton")
+sellAllBindBtn.Name = "SellAllBindBtn"
+sellAllBindBtn.Parent = settingsFrame
+sellAllBindBtn.Size = UDim2.new(0, 130, 0, 24)
+sellAllBindBtn.Position = UDim2.new(0, 12, 0, 214)
+sellAllBindBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+sellAllBindBtn.BorderSizePixel = 0
+sellAllBindBtn.Font = Enum.Font.SourceSans
+sellAllBindBtn.TextSize = 16
+sellAllBindBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+sellAllBindBtn.TextXAlignment = Enum.TextXAlignment.Center
+sellAllBindBtn.AutoButtonColor = true
+sellAllBindBtn.ZIndex = 5
+
+local sellAllBindCorner = Instance.new("UICorner")
+sellAllBindCorner.CornerRadius = UDim.new(0, 6)
+sellAllBindCorner.Parent = sellAllBindBtn
+
+sellAllResetBindBtn = Instance.new("TextButton")
+sellAllResetBindBtn.Name = "SellAllResetBindBtn"
+sellAllResetBindBtn.Parent = settingsFrame
+sellAllResetBindBtn.Size = UDim2.new(0, 70, 0, 24)
+sellAllResetBindBtn.Position = UDim2.new(0, 150, 0, 214)
+sellAllResetBindBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+sellAllResetBindBtn.BorderSizePixel = 0
+sellAllResetBindBtn.Font = Enum.Font.SourceSans
+sellAllResetBindBtn.TextSize = 16
+sellAllResetBindBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+sellAllResetBindBtn.Text = "Reset"
+sellAllResetBindBtn.ZIndex = 5
+
+local sellAllResetBindCorner = Instance.new("UICorner")
+sellAllResetBindCorner.CornerRadius = UDim.new(0, 6)
+sellAllResetBindCorner.Parent = sellAllResetBindBtn
+
+sellAllNowBtn = Instance.new("TextButton")
+sellAllNowBtn.Name = "SellAllNowBtn"
+sellAllNowBtn.Parent = settingsFrame
+sellAllNowBtn.Size = UDim2.new(0, 90, 0, 24)
+sellAllNowBtn.Position = UDim2.new(0, 230, 0, 214)
+sellAllNowBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+sellAllNowBtn.BorderSizePixel = 0
+sellAllNowBtn.Font = Enum.Font.SourceSans
+sellAllNowBtn.TextSize = 16
+sellAllNowBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+sellAllNowBtn.Text = "Sell Now"
+sellAllNowBtn.ZIndex = 5
+
+local sellAllNowCorner = Instance.new("UICorner")
+sellAllNowCorner.CornerRadius = UDim.new(0, 6)
+sellAllNowCorner.Parent = sellAllNowBtn
+
+refreshSellAllBindText()
+
+sellAllBindBtn.MouseButton1Click:Connect(function()
+    sellAllBindingActive = true
+    autoFishBindingActive = false -- only bind one thing at a time
+    refreshSellAllBindText()
+    refreshAutoFishBindText()
+end)
+
+sellAllResetBindBtn.MouseButton1Click:Connect(function()
+    sellAllBindingActive = false
+    sellAllHotkey = nil
+    refreshSellAllBindText()
+end)
+
+sellAllNowBtn.MouseButton1Click:Connect(function()
+    DevSellAll()
 end)
 
 ---------------------------------------------------------------------
@@ -473,7 +787,7 @@ local function teleportToPlayer(targetPlayer)
     if not myHRP then return end
 
     local targetChar = targetPlayer.Character or targetPlayer.CharacterAdded:Wait()
-    local targetHRP = targetChar:FindFirstChild("HumanoidRootPart")
+    local targetHRP = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
     if not targetHRP then return end
 
     myHRP.CFrame = targetHRP.CFrame * CFrame.new(0, 0, 3)
@@ -483,7 +797,7 @@ local teleportTitle = Instance.new("TextLabel")
 teleportTitle.Parent = settingsFrame
 teleportTitle.BackgroundTransparency = 1
 teleportTitle.Size = UDim2.new(1, -16, 0, 20)
-teleportTitle.Position = UDim2.new(0, 12, 0, 160)
+teleportTitle.Position = UDim2.new(0, 12, 0, 248)
 teleportTitle.Font = Enum.Font.SourceSansBold
 teleportTitle.TextSize = 16
 teleportTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -497,8 +811,8 @@ teleportScroll.Parent = settingsFrame
 teleportScroll.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 teleportScroll.BackgroundTransparency = 0.12
 teleportScroll.BorderSizePixel = 0
-teleportScroll.Size = UDim2.new(1, -24, 1, -196)
-teleportScroll.Position = UDim2.new(0, 12, 0, 184)
+teleportScroll.Size = UDim2.new(1, -24, 1, -290)
+teleportScroll.Position = UDim2.new(0, 12, 0, 272)
 teleportScroll.ScrollBarThickness = 5
 teleportScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 teleportScroll.ClipsDescendants = true
@@ -518,7 +832,7 @@ local function updateTeleportCanvasSize()
     local totalHeight = 0
     for _, child in ipairs(teleportScroll:GetChildren()) do
         if child:IsA("TextButton") then
-            totalHeight = totalHeight + (child.AbsoluteSize.Y + teleportListLayout.Padding.Offset)
+            totalHeight += child.AbsoluteSize.Y + teleportListLayout.Padding.Offset
         end
     end
     teleportScroll.CanvasSize = UDim2.new(0, 0, 0, totalHeight)
@@ -548,12 +862,14 @@ local function refreshTeleportList()
             btn.TextSize = 16
             btn.TextColor3 = Color3.fromRGB(255, 255, 255)
             btn.TextXAlignment = Enum.TextXAlignment.Left
+
             btn.Text = string.format(
                 "Teleport to %s (X: %.1f  Y: %.1f)",
                 plr.Name,
                 pos.X,
                 pos.Y
             )
+
             btn.ZIndex = 6
 
             local corner = Instance.new("UICorner")
@@ -647,113 +963,6 @@ local function setShowXYHud(value)
 end
 
 ---------------------------------------------------------------------
--- Auto Fish logic (generic Tool-based)
----------------------------------------------------------------------
-local autoFishEnabled = false
-local autoFishState = "idle"
-local autoFishTimer = 0
-local BITE_TIME = 4        -- seconds waiting after cast
-local COOLDOWN_TIME = 2    -- seconds after reel before next cast
-local currentRod
-
-local function updateAutoFishVisual()
-    if autoFishEnabled then
-        autoFishToggleButton.Text = "✔"
-        autoFishToggleButton.TextColor3 = Color3.fromRGB(0, 200, 0)
-    else
-        autoFishToggleButton.Text = ""
-        autoFishToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    end
-end
-
-local function findRod()
-    local character = player.Character
-    local backpack = player:FindFirstChild("Backpack")
-
-    if character then
-        for _, child in ipairs(character:GetChildren()) do
-            if child:IsA("Tool") and child.Name:lower():find("fish") then
-                return child
-            end
-        end
-    end
-
-    if backpack then
-        for _, child in ipairs(backpack:GetChildren()) do
-            if child:IsA("Tool") and child.Name:lower():find("fish") then
-                return child
-            end
-        end
-    end
-
-    return nil
-end
-
-local function ensureRodEquipped()
-    local char = player.Character
-    if not char then return nil end
-
-    currentRod = currentRod or findRod()
-    if not currentRod then
-        currentRod = findRod()
-    end
-    if not currentRod then return nil end
-
-    if currentRod.Parent ~= char then
-        currentRod.Parent = char
-    end
-
-    return currentRod
-end
-
-local function castRod()
-    local rod = ensureRodEquipped()
-    if rod then
-        rod:Activate()
-    end
-end
-
-local function reelRod()
-    if currentRod then
-        currentRod:Activate()
-    end
-end
-
-local function setAutoFish(value)
-    autoFishEnabled = value
-    autoFishState = "idle"
-    autoFishTimer = 0
-    updateAutoFishVisual()
-end
-
-RunService.Heartbeat:Connect(function(dt)
-    if not autoFishEnabled then return end
-
-    autoFishTimer += dt
-
-    if autoFishState == "idle" then
-        if ensureRodEquipped() then
-            castRod()
-            autoFishState = "waiting_for_bite"
-            autoFishTimer = 0
-        end
-
-    elseif autoFishState == "waiting_for_bite" then
-        if autoFishTimer >= BITE_TIME then
-            reelRod()
-            autoFishState = "cooldown"
-            autoFishTimer = 0
-        end
-
-    elseif autoFishState == "cooldown" then
-        if autoFishTimer >= COOLDOWN_TIME then
-            autoFishState = "idle"
-            autoFishTimer = 0
-        end
-    end
-end)
-
----------------------------------------------------------------------
 -- Wiring up interactions
 ---------------------------------------------------------------------
 xyToggleButton.MouseButton1Click:Connect(function()
@@ -764,14 +973,6 @@ xyToggleLabel.MouseButton1Click:Connect(function()
     setShowXYHud(not showXYHud)
 end)
 
-autoFishToggleButton.MouseButton1Click:Connect(function()
-    setAutoFish(not autoFishEnabled)
-end)
-
-autoFishLabel.MouseButton1Click:Connect(function()
-    setAutoFish(not autoFishEnabled)
-end)
-
 RunService.RenderStepped:Connect(function()
     if showXYHud and xyLabel and hrp and hrp.Parent then
         local pos = hrp.Position
@@ -779,4 +980,48 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-print("Dev Tools + Auto Fish loaded.")
+---------------------------------------------------------------------
+-- Global Input: AutoFish + SellAll Keybinding
+---------------------------------------------------------------------
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    -- Keybinding capture mode
+    if input.UserInputType == Enum.UserInputType.Keyboard then
+        if autoFishBindingActive then
+            autoFishBindingActive = false
+
+            if input.KeyCode ~= Enum.KeyCode.Unknown then
+                autoFishHotkey = input.KeyCode
+            else
+                autoFishHotkey = nil
+            end
+
+            refreshAutoFishBindText()
+            return
+        elseif sellAllBindingActive then
+            sellAllBindingActive = false
+
+            if input.KeyCode ~= Enum.KeyCode.Unknown then
+                sellAllHotkey = input.KeyCode
+            else
+                sellAllHotkey = nil
+            end
+
+            refreshSellAllBindText()
+            return
+        end
+    end
+
+    if gameProcessed then return end
+
+    if input.UserInputType == Enum.UserInputType.Keyboard then
+        -- Trigger Auto Fishing via bound hotkey
+        if autoFishHotkey and input.KeyCode == autoFishHotkey then
+            handleAutoFishClick()
+        end
+
+        -- Trigger Sell All via bound hotkey
+        if sellAllHotkey and input.KeyCode == sellAllHotkey then
+            DevSellAll()
+        end
+    end
+end)
